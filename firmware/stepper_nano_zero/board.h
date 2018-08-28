@@ -22,12 +22,12 @@
 //#define NEMA_23_10A_HW
 
 //uncomment the following if the board uses the A5995 driver (NEMA 23 3.2A boards)
-//#define A5995_DRIVER
+#define A5995_DRIVER
 
 //The March 21 2017 NEMA 17 Smart Stepper has changed some pin outs
 // A1 was changed to read motor voltage, hence SW4 is now using D4
 // comment out this next line if using the older hardware
-#define NEMA17_SMART_STEPPER_3_21_2017
+//#define NEMA17_SMART_STEPPER_3_21_2017
 
 
 #ifdef A5995_DRIVER
@@ -311,7 +311,11 @@ typedef enum {
 
 
 //Here are some useful macros
-#define DIVIDE_WITH_ROUND(x,y)  ((x+y/2)/y)
+//ammoody added
+//correct divide_with_round macro to correctly handle negative numbers
+#define DIVIDE_WITH_ROUND(n,d) ((((n) < 0) ^ ((d) < 0)) ? (((n) - (d)/2)/(d)) : (((n) + (d)/2)/(d)))
+//ammoody added
+//#define DIVIDE_WITH_ROUND(x,y)  ((x+y/2)/y)
 
 
 #define GPIO_LOW(pin) {PORT->Group[g_APinDescription[(pin)].ulPort].OUTCLR.reg = (1ul << g_APinDescription[(pin)].ulPin);}
@@ -411,7 +415,11 @@ static void inline RED_LED(bool state)
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define ABS(a) (((a)>(0))?(a):(-(a)))
 #define DIV(x,y) (((y)>(0))?((x)/(y)):(4294967295))
-#define SIGN(x)  (((x) > 0) - ((x) < 0))
+//ammoody added
+//fix SIGN macro to correctly handle 0 as a positive number
+#define SIGN(x)  (((x) >= 0) - ((x) < 0))
+//ammoody added
+//#define SIGN(x)  (((x) > 0) - ((x) < 0))
 
 #define NVIC_IS_IRQ_ENABLED(x) (NVIC->ISER[0] & (1 << ((uint32_t)(x) & 0x1F)))!=0
 

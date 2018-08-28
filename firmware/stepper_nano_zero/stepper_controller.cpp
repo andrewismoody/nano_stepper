@@ -23,6 +23,13 @@
 
 volatile bool TC5_ISR_Enabled=false;
 
+//ammoody added
+// declare errorThreshold at class level to share across functions
+// errorThreshold is one microstep worth of angle
+// initialize to low value in case motor params have not loaded yet
+int32_t errorThreshold = 10; //fullstep @ 200 steps per rotation (327) divided by 32 microsteps
+//ammoody added
+
 void setupTCInterrupts() {
 
 
@@ -158,6 +165,14 @@ void StepperCtrl::updateParamsFromNVM(void)
 	stepperDriver.setRotationDirection(motorParams.motorWiring);
 
 	exitCriticalSection(state);
+
+  //ammoody added
+  //set error threshold from NZS parameters
+  int32_t fullStep = ANGLE_STEPS / motorParams.fullStepsPerRotation;
+  int32_t microsteps = systemParams.microsteps;
+  errorThreshold = fullStep / microsteps;
+  //ammoody added
+
 }
 
 
@@ -996,7 +1011,7 @@ bool StepperCtrl::vpidFeedback(int64_t desiredLoc, int64_t currentLoc, Control_t
 	v=y-lastY;
 
 	//add in phase prediction
-	y=y+calculatePhasePrediction(currentLoc);
+	y=y+calculatePhasePrediction(currentLoc, lastError);
 	z=y;
 
 
@@ -1081,7 +1096,7 @@ bool StepperCtrl::pidFeedback(int64_t desiredLoc, int64_t currentLoc, Control_t 
 	y=currentLoc;
 
 	//add in phase prediction
-	y=y+calculatePhasePrediction(currentLoc);
+	y=y+calculatePhasePrediction(currentLoc, lastError);
 
 	if (enableFeedback) //if ((micros()-lastCall)>(updateRate/10))
 	{
@@ -1156,7 +1171,12 @@ bool StepperCtrl::pidFeedback(int64_t desiredLoc, int64_t currentLoc, Control_t 
 // on current location and previous location.
 // TODO our error can help in the phase prediction.
 // if the error
-int64_t StepperCtrl::calculatePhasePrediction(int64_t currentLoc)
+
+//ammoody added
+//introduce error parameter so phase prediction can reset logic upon motor direction change
+int64_t StepperCtrl::calculatePhasePrediction(int64_t currentLoc, int32_t error)
+//ammoody added
+//int64_t StepperCtrl::calculatePhasePrediction(int64_t currentLoc)
 {
 	static int64_t lastLoc=0;
 	static int32_t mean=0;
@@ -1166,14 +1186,35 @@ int64_t StepperCtrl::calculatePhasePrediction(int64_t currentLoc)
 	return 0;
 #endif
 
+  //ammoody added
+  // set up lasterror and scale variables and set lastloc to currentloc when uninitialized to reduce miscalculations on first pass
+  int32_t scale = 128;
+  static int32_t lastError = 0;
+
+    if (lastLoc == 0)
+        lastLoc = currentLoc;
+  //ammoody added
+
 	//what was our change in the location
 	dx=currentLoc-lastLoc;  //max value is typically less than 327(1.8 degrees) or 163(0.9 degree)
+  //ammoody added
+  //scale dx one time for more accurate calculations
+  dx *= scale;
+  //ammoody added
 
 	//if the motor direction changes,  zero phase prediction
-	if (SIGN(dx) != SIGN(mean))
+  //ammoody added
+  //using error to indicate motor direction change
+  if (SIGN(lastError) != SIGN(error))
+  //ammoody added
+	//if (SIGN(dx) != SIGN(mean))
 	{
 		//last thing we want is phase prediction during direction change.
 		mean=0;
+    //ammoody added
+    //reinitiatlize lastLoc on motor direction change to improve phase prediction
+    lastLoc = 0;
+    //ammoody added
 	} else
 	{
 		if (abs(dx)>abs(mean))
@@ -1184,17 +1225,30 @@ int64_t StepperCtrl::calculatePhasePrediction(int64_t currentLoc)
 			// this limits the acceleration of motor above max processing speed (6k*1.8)=1800RPM
 			//  however I doubt the motor can accelerate that fast with any load...
 			//  The average helps prevent external impulse error from causing prediction to cause issues.
-			mean=DIVIDE_WITH_ROUND(2047*mean + dx*128, 2048);
+      //ammoody added
+      //correct mean math
+      mean=DIVIDE_WITH_ROUND(2048 * (mean + dx), 4096);
+      //ammoody added
+			//mean=DIVIDE_WITH_ROUND(2047*mean + dx*128, 2048);
 		}else
 		{
 			//decrease fast
 			//do not add more phase prediction than the difference in last two samples.
-			mean=dx*128;
+      //ammoody added
+      //remove insitu scaling of dx
+      mean = dx;
+      //ammoody added
+			//mean=dx*128;
 		}
 	}
 	lastLoc=currentLoc;
+  //ammoody added
+  //set last error to error for next calculation pass and replace scale constant with variable for consistency
+  lastError = error;
+  x = mean / scale; //scale back to normal
+  //ammoody added
 
-	x= mean/128; //scale back to normal
+	//x= mean/128; //scale back to normal
 	return x;
 }
 
@@ -1261,7 +1315,7 @@ bool StepperCtrl::simpleFeedback(int64_t desiredLoc, int64_t currentLoc, Control
 	y=currentLoc;
 
 	//add in phase prediction
-	y=y+calculatePhasePrediction(currentLoc);
+	y=y+calculatePhasePrediction(currentLoc, lastError);
 
 
 	//we can limit the velocity by controlling the amount we move per call to this function
@@ -1286,6 +1340,20 @@ bool StepperCtrl::simpleFeedback(int64_t desiredLoc, int64_t currentLoc, Control
 		//error is in units of degrees when 360 degrees == 65536
 		error=(desiredLoc-y);//measureError(); //error is currentPos-desiredPos
 
+    //ammoody added
+    //to reset PID logic when motor changes direction - either because of motion planner direction change or because of PID oscillations about target position
+    if (SIGN(error) != SIGN(lastError))
+    {
+        lastError=0;
+        iTerm = 0;
+        i = 0;
+        maxError = 0;
+        errorCount = 0;
+        lastProbeState = false;
+        maxMa = 0;
+        probeCount = 0;
+    }
+    //ammoody added
 
 		//data[i]=(int16_t)error;
 		//i++;
@@ -1389,8 +1457,15 @@ bool StepperCtrl::simpleFeedback(int64_t desiredLoc, int64_t currentLoc, Control
 			//maxMa=0;
 		}
 
+    //ammoody added
+    //threshold check to prevent infinite loops when deltas are too small for PID algorithm to catch.
+    if (abs(error) < errorThreshold)
+      y = desiredLoc;
+    else
+      y=y+u;
+    //ammoody added
 
-		y=y+u;
+		//y=y+u;
 		ptrCtrl->ma=ma;
 		ptrCtrl->angle=(int32_t)y;
 		moveToAngle(y,ma); //35us
@@ -1580,7 +1655,13 @@ bool StepperCtrl::processFeedback(void)
 	desiredLoc=getDesiredLocation();
 
 	currentLoc=getCurrentLocation();
-	mean=(31*mean+currentLoc+16)/32;
+
+  //ammoody added
+  //mean calculations are not mathematically correct
+  mean = (32 * (mean + currentLoc)) / 64;
+  //ammoody added
+  
+	//mean=(31*mean+currentLoc+16)/32;
 
 #ifdef A5995_DRIVER //the A5995 is has more driver noise
 	if (abs(currentLoc-mean)<ANGLE_FROM_DEGREES(0.9))

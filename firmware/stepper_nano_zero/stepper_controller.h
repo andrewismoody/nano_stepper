@@ -132,7 +132,11 @@ class StepperCtrl
 		int64_t getDesiredLocation(void);
 		void updateLocTable(int64_t desiredLoc, int64_t currentLoc,Control_t *ptrCtrl);
 
-		int64_t calculatePhasePrediction(int64_t currentLoc);
+    //ammoody added
+    //introduce error parameter so phase prediction can reset logic upon motor direction change
+    int64_t calculatePhasePrediction(int64_t currentLoc, int32_t error);
+    //ammoody added
+		//int64_t calculatePhasePrediction(int64_t currentLoc);
 		bool determineError(int64_t currentLoc, int64_t error);
 
 	public:
